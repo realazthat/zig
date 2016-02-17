@@ -35,14 +35,12 @@ install:
 build_script:
 - ps: >-
     bash -c @"
-        set -exv
         bash ci/mingw64-build.sh
     "@
 
 test_script:
 - ps: >-
     bash -c @"
-        set -exv
         cd build && ./runtests
     
     "

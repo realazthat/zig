@@ -8,8 +8,9 @@ PROJECT_PATH="$PWD"
 
 mkdir -p ./build && cd ./build
 
-ZIG_LIBC_LIB_DIR=/usr/lib/x86_64-linux-gnu/ 
+ZIG_LIBC_LIB_DIR=$(dirname $(cc -print-file-name=crt1.o))
 ZIG_LIBC_INCLUDE_DIR=/usr/include
+ZIG_LIBC_STATIC_LIB_DIR=$(dirname $(cc -print-file-name=crtbegin.o))
 
 cmake .. \
     -DCMAKE_VERBOSE_MAKEFILE=1 \

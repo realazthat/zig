@@ -38,4 +38,4 @@ build_script:
 
 test_script:
 - ps: >-
-    bash -c "cd build && ./runtests"
+    bash -c "cd build && ./run_tests"

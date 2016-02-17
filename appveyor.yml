@@ -1,0 +1,37 @@
+version: 1.0.{build}
+environment:
+  matrix:
+  - CMAKE_BUILD_TYPE: Release
+    CMAKE_GENERATOR: MSYS Makefiles
+    CEGUI_BUILD_TYPE: Release
+    CXX: clang++
+    CC: clang
+install:
+- cmd: >-
+    set "PATH=C:\msys64\mingw64\bin;C:\msys64\usr\bin;C:\Windows\System32;C:\Windows;%PATH%"
+
+    set MSYSTEM=MINGW64
+
+    pacman --noconfirm -Sy
+
+    pacman --noconfirm --needed -S pacman-mirrors
+
+    pacman --noconfirm -Sy
+
+    pacman --noconfirm --needed -S base-devel zip wget mingw-w64-x86_64-toolchain mercurial mingw64/mingw-w64-x86_64-gcc mingw64/mingw-w64-x86_64-cmake
+
+    pacman --noconfirm --needed -S mingw64/mingw-w64-x86_64-llvm mingw64/mingw-w64-x86_64-clang
+build_script:
+- ps: >-
+    bash -c @"
+        set -exv
+        bash ci/mingw64-build.sh
+    "@
+
+test_script:
+- ps: >-
+    bash -c @"
+        set -exv
+        cd build && ./runtests
+    
+    "

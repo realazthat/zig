@@ -1,0 +1,30 @@
+sudo: required
+dist: trusty
+
+language: cpp
+compiler:
+  - gcc
+  - clang
+
+addons:
+  apt:
+    sources:
+    - ubuntu-toolchain-r-test
+    packages:
+    - gcc-5
+    - g++-5
+
+
+install:
+  - sudo bash ./ci/install-llvm-37-from-repos.sh
+  - if [ "$CXX" = "clang++" ]; then export CXX="clang++-3.7" CC="clang-3.7"; fi
+  - if [ "$CXX" = "g++" ]; then export CXX="g++-5" CC="gcc-5"; fi
+
+
+script:
+  - bash ./ci/build.sh
+  - bash ./ci/test.sh
+  
+
+
+

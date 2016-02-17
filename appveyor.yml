@@ -33,14 +33,9 @@ install:
 
     pacman --noconfirm --needed -S mingw64/mingw-w64-x86_64-llvm mingw64/mingw-w64-x86_64-clang
 build_script:
-- ps: >-
-    bash -c @"
-        bash ci/mingw64-build.sh
-    "@
+- cmd: >-
+    bash ci/mingw64-build.sh
 
 test_script:
 - ps: >-
-    bash -c @"
-        cd build && ./runtests
-    
-    "
+    bash -c "cd build && ./runtests"

@@ -36,7 +36,7 @@ build_script:
 - ps: >-
     bash -c @"
         set -exv
-        LLVM_CONFIG_EXE=llvm-config bash ci/mingw64-build.sh
+        CMAKE_BUILD_TYPE=$CMAKE_BUILD_TYPE CMAKE_GENERATOR="$CMAKE_GENERATOR" bash ci/mingw64-build.sh
     "@
 
 test_script:

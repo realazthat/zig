@@ -11,7 +11,7 @@ mkdir -p ./build && cd ./build
 ZIG_LIBC_LIB_DIR=$(dirname $(cc -print-file-name=crt1.o))
 ZIG_LIBC_INCLUDE_DIR=/usr/include
 ZIG_LIBC_STATIC_LIB_DIR=$(dirname $(cc -print-file-name=crtbegin.o))
-LLVM_LIBRARIES=`$LLVM_CONFIG_EXE --libfiles`
+LLVM_LIBRARIES=`$LLVM_CONFIG_EXE --libs`
 LLVM_SYSTEM_LIBS=`$LLVM_CONFIG_EXE --system-libs`
 LLVM_LIBDIRS=`$LLVM_CONFIG_EXE --libdir`
 
@@ -23,7 +23,6 @@ cmake .. \
     -DLLVM_CONFIG_EXE=$LLVM_CONFIG_EXE \
     -DLLVM_LIBRARIES="$LLVM_LIBRARIES" \
     -DLLVM_SYSTEM_LIBS="$LLVM_SYSTEM_LIBS" \
-    -DLLVM_LIBDIRS="$LLVM_LIBDIRS" \
     -DZIG_LIBC_LIB_DIR="$ZIG_LIBC_LIB_DIR" \
     -DZIG_LIBC_INCLUDE_DIR="$ZIG_LIBC_INCLUDE_DIR"
 

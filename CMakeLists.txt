@@ -24,7 +24,7 @@ set(ZIG_DYNAMIC_LINKER "" CACHE STRING "Override dynamic linker for native targe
 
 find_package(llvm)
 include_directories(${LLVM_INCLUDE_DIRS})
-link_directories(${LLVM_LIBDIRS})
+link_directories(${LLVM_LIBRARY_DIRS})
 
 find_package(clang)
 include_directories(${CLANG_INCLUDE_DIRS})

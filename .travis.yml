@@ -38,7 +38,7 @@ script:
   - bash ./ci/test.sh || RESULT=$?
   - cd build
   - ./zig build .tmp_source.zig --export exe --name test --output ./.tmp_exe --release --strip --color on
-  - for i in $(find ./ -maxdepth 1 -name 'core*' -print); do gdb $(pwd)/zig core* -ex "thread apply all bt" -ex "set pagination 0" -batch; done;
+  - for i in $(find ./ -maxdepth 1 -name 'core*' -print); do gdb $(pwd)/zig core* -ex "thread apply all bt full" -ex "set pagination 0" -batch; done;
   - if [[ ${RESULT} != 0 ]]; then exit $RESULT ; fi;
   - cd ..
 

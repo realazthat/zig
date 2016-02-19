@@ -427,7 +427,7 @@ struct AstNodeFieldAccessExpr {
 
 struct AstNodeDirective {
     Buf name;
-    Buf param;
+    AstNode *expr;
 };
 
 struct AstNodeRootExportDecl {
@@ -526,6 +526,7 @@ struct AstNodeSwitchExpr {
 
     // populated by semantic analyzer
     Expr resolved_expr;
+    int const_chosen_prong_index;
 };
 
 struct AstNodeSwitchProng {
@@ -1130,6 +1131,10 @@ struct CodeGen {
     bool windows_subsystem_windows;
     bool windows_subsystem_console;
     bool windows_linker_unicode;
+    Buf *darwin_linker_version;
+    Buf *mmacosx_version_min;
+    Buf *mios_version_min;
+    bool linker_rdynamic;
 
     // The function definitions this module includes. There must be a corresponding
     // fn_protos entry.

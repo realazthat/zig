@@ -22,6 +22,31 @@
 #include <errno.h>
 
 
+static void init_darwin_native(CodeGen *g) {
+    char *osx_target = getenv("MACOSX_DEPLOYMENT_TARGET");
+    char *ios_target = getenv("IPHONEOS_DEPLOYMENT_TARGET");
+
+    // Allow conflicts among OSX and iOS, but choose the default platform.
+    if (osx_target && ios_target) {
+        if (g->zig_target.arch.arch == ZigLLVM_arm ||
+            g->zig_target.arch.arch == ZigLLVM_aarch64 ||
+            g->zig_target.arch.arch == ZigLLVM_thumb)
+        {
+            osx_target = nullptr;
+        } else {
+            ios_target = nullptr;
+        }
+    }
+
+    if (osx_target) {
+        g->mmacosx_version_min = buf_create_from_str(osx_target);
+    } else if (ios_target) {
+        g->mios_version_min = buf_create_from_str(ios_target);
+    } else {
+        zig_panic("unable to determine -mmacosx-version-min or -mios-version-min");
+    }
+}
+
 CodeGen *codegen_create(Buf *root_source_dir, const ZigTarget *target) {
     CodeGen *g = allocate<CodeGen>(1);
     g->import_table.init(32);
@@ -46,6 +71,7 @@ CodeGen *codegen_create(Buf *root_source_dir, const ZigTarget *target) {
         g->libc_static_lib_dir = buf_create_from_str("");
         g->libc_include_dir = buf_create_from_str("");
         g->linker_path = buf_create_from_str("");
+        g->darwin_linker_version = buf_create_from_str("");
     } else {
         // native compilation, we can rely on the configuration stuff
         g->is_native_target = true;
@@ -56,6 +82,15 @@ CodeGen *codegen_create(Buf *root_source_dir, const ZigTarget *target) {
         g->libc_static_lib_dir = buf_create_from_str(ZIG_LIBC_STATIC_LIB_DIR);
         g->libc_include_dir = buf_create_from_str(ZIG_LIBC_INCLUDE_DIR);
         g->linker_path = buf_create_from_str(ZIG_LD_PATH);
+        g->darwin_linker_version = buf_create_from_str(ZIG_HOST_LINK_VERSION);
+
+        if (g->zig_target.os == ZigLLVM_Darwin ||
+            g->zig_target.os == ZigLLVM_MacOSX ||
+            g->zig_target.os == ZigLLVM_IOS)
+        {
+            init_darwin_native(g);
+        }
+
     }
 
     return g;
@@ -129,6 +164,22 @@ void codegen_set_windows_subsystem(CodeGen *g, bool mwindows, bool mconsole) {
 
 void codegen_set_windows_unicode(CodeGen *g, bool municode) {
     g->windows_linker_unicode = municode;
+}
+
+void codegen_set_mlinker_version(CodeGen *g, Buf *darwin_linker_version) {
+    g->darwin_linker_version = darwin_linker_version;
+}
+
+void codegen_set_mmacosx_version_min(CodeGen *g, Buf *mmacosx_version_min) {
+    g->mmacosx_version_min = mmacosx_version_min;
+}
+
+void codegen_set_mios_version_min(CodeGen *g, Buf *mios_version_min) {
+    g->mios_version_min = mios_version_min;
+}
+
+void codegen_set_rdynamic(CodeGen *g, bool rdynamic) {
+    g->linker_rdynamic = rdynamic;
 }
 
 static LLVMValueRef gen_expr(CodeGen *g, AstNode *expr_node);
@@ -2099,7 +2150,8 @@ static LLVMValueRef gen_container_init_expr(CodeGen *g, AstNode *node) {
         if (!g->is_release_build) {
             LLVMBuildCall(g->builder, g->trap_fn_val, nullptr, 0, "");
         }
-        return LLVMBuildUnreachable(g->builder);
+        LLVMBuildUnreachable(g->builder);
+        return nullptr;
     } else if (type_entry->id == TypeTableEntryIdVoid) {
         assert(node->data.container_init_expr.entries.length == 0);
         return nullptr;
@@ -2435,6 +2487,13 @@ static LLVMValueRef gen_symbol(CodeGen *g, AstNode *node) {
 
 static LLVMValueRef gen_switch_expr(CodeGen *g, AstNode *node) {
     assert(node->type == NodeTypeSwitchExpr);
+
+    if (node->data.switch_expr.const_chosen_prong_index >= 0) {
+        AstNode *prong_node = node->data.switch_expr.prongs.at(node->data.switch_expr.const_chosen_prong_index);
+        assert(prong_node->type == NodeTypeSwitchProng);
+        AstNode *prong_expr = prong_node->data.switch_prong.expr;
+        return gen_expr(g, prong_expr);
+    }
 
     TypeTableEntry *target_type = get_expr_type(node->data.switch_expr.expr);
     LLVMValueRef target_value_handle = gen_expr(g, node->data.switch_expr.expr);
@@ -3527,7 +3586,7 @@ static void define_builtin_types(CodeGen *g) {
             type_enum_field->name = buf_create_from_str(ZigLLVMGetEnvironmentTypeName(environ_type));
             type_enum_field->value = i;
 
-            if (environ_type == g->zig_target.environ) {
+            if (environ_type == g->zig_target.env_type) {
                 g->target_environ_index = i;
             }
         }
@@ -3695,7 +3754,7 @@ static void init(CodeGen *g, Buf *source_path) {
 }
 
 void codegen_parseh(CodeGen *g, Buf *src_dirname, Buf *src_basename, Buf *source_code) {
-    find_libc_path(g);
+    find_libc_include_path(g);
     Buf *full_path = buf_alloc();
     os_path_join(src_dirname, src_basename, full_path);
 
@@ -3826,18 +3885,23 @@ static ImportTableEntry *codegen_add_code(CodeGen *g, Buf *abs_full_path,
                     for (int i = 0; i < directives->length; i += 1) {
                         AstNode *directive_node = directives->at(i);
                         Buf *name = &directive_node->data.directive.name;
-                        Buf *param = &directive_node->data.directive.param;
-                        if (buf_eql_str(name, "version")) {
-                            set_root_export_version(g, param, directive_node);
-                        } else if (buf_eql_str(name, "link")) {
-                            if (buf_eql_str(param, "c")) {
-                                g->link_libc = true;
+                        AstNode *param_node = directive_node->data.directive.expr;
+                        assert(param_node->type == NodeTypeStringLiteral);
+                        Buf *param = &param_node->data.string_literal.buf;
+
+                        if (param) {
+                            if (buf_eql_str(name, "version")) {
+                                set_root_export_version(g, param, directive_node);
+                            } else if (buf_eql_str(name, "link")) {
+                                if (buf_eql_str(param, "c")) {
+                                    g->link_libc = true;
+                                } else {
+                                    g->link_libs.append(param);
+                                }
                             } else {
-                                g->link_libs.append(param);
+                                add_node_error(g, directive_node,
+                                        buf_sprintf("invalid directive: '%s'", buf_ptr(name)));
                             }
-                        } else {
-                            add_node_error(g, directive_node,
-                                    buf_sprintf("invalid directive: '%s'", buf_ptr(name)));
                         }
                     }
                 }

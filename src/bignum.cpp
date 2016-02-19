@@ -9,6 +9,7 @@
 
 #include <assert.h>
 #include <math.h>
+#include <inttypes.h>
 
 static void bignum_normalize(BigNum *bn) {
     assert(bn->kind == BigNumKindInt);

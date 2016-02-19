@@ -24,11 +24,19 @@ find_program(LLVM_CONFIG_EXE NAMES llvm-config llvm-config-3.7 DOC "Path to llvm
 
 
 #NOTE: TODO: find this with llvm-config??
-find_path(LLVM_BASE_INCLUDE_DIR NAMES llvm/IR/IRBuilder.h PATHS /usr/include/llvm-3.7/ DOC "List of directories to add to the include path for LLVM")
-find_path(LLVM_C_INCLUDE_DIR NAMES llvm-c/Core.h PATHS /usr/include/llvm-c-3.7/ DOC "List of directories to add to the include path for LLVM-C library")
+find_path(LLVM_INCLUDE_DIR NAMES llvm-c/Core.h PATHS /usr/include/llvm-c-3.7/ DOC "List of directories to add to the include path for LLVM library")
 mark_as_advanced(LLVM_BASE_INCLUDE_DIR LLVM_C_INCLUDE_DIR)
 
-set(LLVM_INCLUDE_DIRS ${LLVM_C_INCLUDE_DIR} ${LLVM_BASE_INCLUDE_DIR})
+set(LLVM_LIBRARIES ${LLVM_LIBRARIES} ${LLVM_SYSTEM_LIBS})
+if(NOT LLVM_INCLUDE_DIR)
+  execute_process(
+      COMMAND ${LLVM_CONFIG_EXE} --includedir
+      OUTPUT_VARIABLE LLVM_INCLUDE_DIR_COMPUTED
+      OUTPUT_STRIP_TRAILING_WHITESPACE)
+  set(LLVM_INCLUDE_DIR_COMPUTED "${LLVM_INCLUDE_DIR_COMPUTED}" CACHE STRING "List of LLVM libraries to use when linking against LLVM")
+  mark_as_advanced(LLVM_INCLUDE_DIR)
+endif()
+
 
 #NOTE: TODO: Why do we not have a separate LLVM_C_LIBRARY? 
 if(NOT LLVM_BASE_LIBRARY)
@@ -64,7 +72,7 @@ endif()
 
 include(FindPackageHandleStandardArgs)
 find_package_handle_standard_args(llvm
-  REQUIRED_VARS LLVM_LIBRARY_DIR LLVM_BASE_LIBRARY LLVM_SYSTEM_LIBRARY LLVM_BASE_INCLUDE_DIR LLVM_C_INCLUDE_DIR
+  REQUIRED_VARS LLVM_LIBRARY_DIR LLVM_BASE_LIBRARY LLVM_SYSTEM_LIBRARY LLVM_INCLUDE_DIR
   FAIL_MESSAGE DEFAULT_MSG)
 
 

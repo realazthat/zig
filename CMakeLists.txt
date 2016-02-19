@@ -57,6 +57,7 @@ set(TEST_SOURCES
     "${CMAKE_SOURCE_DIR}/src/buffer.cpp"
     "${CMAKE_SOURCE_DIR}/src/util.cpp"
     "${CMAKE_SOURCE_DIR}/src/os.cpp"
+    "${CMAKE_SOURCE_DIR}/src/error.cpp"
     "${CMAKE_SOURCE_DIR}/test/run_tests.cpp"
 )
 
@@ -144,6 +145,27 @@ set(ZIG_STD_SRC
     "${CMAKE_SOURCE_DIR}/std/math.zig"
 )
 
+
+set(ZIG_HOST_LINK_VERSION)
+if (APPLE)
+    set(LD_V_OUTPUT)
+    execute_process(
+        COMMAND sh -c "${CMAKE_LINKER} -v 2>&1 | head -1"
+        RESULT_VARIABLE HAD_ERROR
+        OUTPUT_VARIABLE LD_V_OUTPUT
+    )
+    if (NOT HAD_ERROR)
+        if ("${LD_V_OUTPUT}" MATCHES ".*ld64-([0-9.]+).*")
+            string(REGEX REPLACE ".*ld64-([0-9.]+).*" "\\1" ZIG_HOST_LINK_VERSION ${LD_V_OUTPUT})
+        elseif ("${LD_V_OUTPUT}" MATCHES "[^0-9]*([0-9.]+).*")
+            string(REGEX REPLACE "[^0-9]*([0-9.]+).*" "\\1" ZIG_HOST_LINK_VERSION ${LD_V_OUTPUT})
+        endif()
+    else()
+        message(FATAL_ERROR "${CMAKE_LINKER} failed with status ${HAD_ERROR}")
+    endif()
+endif()
+
+
 set(C_HEADERS_DEST "lib/zig/include")
 set(ZIG_STD_DEST "lib/zig/std")
 set(CONFIGURE_OUT_FILE "${CMAKE_BINARY_DIR}/config.h")
@@ -158,9 +180,14 @@ include_directories(
     "${CMAKE_SOURCE_DIR}/src"
 )
 
-set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -Werror -Wall -pedantic")
+set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -Werror -Wall")
 
-set(EXE_CFLAGS "-std=c++11 -fno-exceptions -fno-rtti -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -Werror=strict-prototypes -Werror=old-style-definition -Werror=missing-prototypes")
+
+if(MINGW)
+    set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -Wno-error=format= -Wno-error=format -Wno-error=format-extra-args")
+endif()
+
+set(EXE_CFLAGS "-std=c++11 -fno-exceptions -fno-rtti -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -D__USE_MINGW_ANSI_STDIO -Werror=strict-prototypes -Werror=old-style-definition -Werror=missing-prototypes")
 
 add_executable(zig ${ZIG_SOURCES})
 set_target_properties(zig PROPERTIES

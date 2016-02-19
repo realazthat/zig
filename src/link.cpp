@@ -50,6 +50,9 @@ static Buf *build_o(CodeGen *parent_gen, const char *oname) {
     codegen_set_verbose(child_gen, parent_gen->verbose);
     codegen_set_errmsg_color(child_gen, parent_gen->err_color);
 
+    codegen_set_mmacosx_version_min(child_gen, parent_gen->mmacosx_version_min);
+    codegen_set_mios_version_min(child_gen, parent_gen->mios_version_min);
+
     Buf *full_path = buf_alloc();
     os_path_join(std_dir_path, source_basename, full_path);
     Buf source_code = BUF_INIT;
@@ -65,7 +68,7 @@ static Buf *build_o(CodeGen *parent_gen, const char *oname) {
 }
 
 static const char *get_o_file_extension(CodeGen *g) {
-    if (g->zig_target.environ == ZigLLVM_MSVC) {
+    if (g->zig_target.env_type == ZigLLVM_MSVC) {
         return ".obj";
     } else {
         return ".o";
@@ -77,6 +80,24 @@ static const char *get_exe_file_extension(CodeGen *g) {
         return ".exe";
     } else {
         return "";
+    }
+}
+
+static const char *get_darwin_arch_string(const ZigTarget *t) {
+    switch (t->arch.arch) {
+        case ZigLLVM_aarch64:
+            return "arm64";
+        case ZigLLVM_thumb:
+        case ZigLLVM_arm:
+            return "arm";
+        case ZigLLVM_ppc:
+            return "ppc";
+        case ZigLLVM_ppc64:
+            return "ppc64";
+        case ZigLLVM_ppc64le:
+            return "ppc64le";
+        default:
+            return ZigLLVMGetArchTypeName(t->arch.arch);
     }
 }
 
@@ -115,7 +136,7 @@ static const char *getLDMOption(const ZigTarget *t) {
         case ZigLLVM_systemz:
             return "elf64_s390";
         case ZigLLVM_x86_64:
-            if (t->environ == ZigLLVM_GNUX32) {
+            if (t->env_type == ZigLLVM_GNUX32) {
                 return "elf32_x86_64";
             }
             return "elf_x86_64";
@@ -126,6 +147,11 @@ static const char *getLDMOption(const ZigTarget *t) {
 
 static void construct_linker_job_linux(LinkJob *lj) {
     CodeGen *g = lj->codegen;
+
+    if (lj->link_in_crt) {
+        find_libc_lib_path(g);
+    }
+
 
     lj->args.append("-m");
     lj->args.append(getLDMOption(&g->zig_target));
@@ -246,12 +272,16 @@ static void construct_linker_job_linux(LinkJob *lj) {
 }
 
 static bool is_target_cyg_mingw(const ZigTarget *target) {
-    return (target->os == ZigLLVM_Win32 && target->environ == ZigLLVM_Cygnus) ||
-        (target->os == ZigLLVM_Win32 && target->environ == ZigLLVM_GNU);
+    return (target->os == ZigLLVM_Win32 && target->env_type == ZigLLVM_Cygnus) ||
+        (target->os == ZigLLVM_Win32 && target->env_type == ZigLLVM_GNU);
 }
 
 static void construct_linker_job_mingw(LinkJob *lj) {
     CodeGen *g = lj->codegen;
+
+    if (lj->link_in_crt) {
+        find_libc_lib_path(g);
+    }
 
     if (g->zig_target.arch.arch == ZigLLVM_x86) {
         lj->args.append("-m");
@@ -326,6 +356,21 @@ static void construct_linker_job_mingw(LinkJob *lj) {
 
     lj->args.append((const char *)buf_ptr(&lj->out_file_o));
 
+    if (g->is_test_build) {
+        const char *test_runner_name = g->link_libc ? "test_runner_libc" : "test_runner_nolibc";
+        Buf *test_runner_o_path = build_o(g, test_runner_name);
+        lj->args.append(buf_ptr(test_runner_o_path));
+    }
+
+    if (!g->link_libc && (g->out_type == OutTypeExe || g->out_type == OutTypeLib)) {
+        Buf *builtin_o_path = build_o(g, "builtin");
+        lj->args.append(buf_ptr(builtin_o_path));
+
+        Buf *compiler_rt_o_path = build_o(g, "compiler_rt");
+        lj->args.append(buf_ptr(compiler_rt_o_path));
+    }
+
+
     for (int i = 0; i < g->link_libs.length; i += 1) {
         Buf *link_lib = g->link_libs.at(i);
         Buf *arg = buf_sprintf("-l%s", buf_ptr(link_lib));
@@ -340,7 +385,7 @@ static void construct_linker_job_mingw(LinkJob *lj) {
         lj->args.append("-lmingw32");
 
         lj->args.append("-lgcc");
-        bool is_android = (g->zig_target.environ == ZigLLVM_Android);
+        bool is_android = (g->zig_target.env_type == ZigLLVM_Android);
         bool is_cyg_ming = is_target_cyg_mingw(&g->zig_target);
         if (!g->is_static && !is_android) {
             if (!is_cyg_ming) {
@@ -382,40 +427,270 @@ static void construct_linker_job_mingw(LinkJob *lj) {
     }
 }
 
+
+// Parse (([0-9]+)(.([0-9]+)(.([0-9]+)?))?)? and return the
+// grouped values as integers. Numbers which are not provided are set to 0.
+// return true if the entire string was parsed (9.2), or all groups were
+// parsed (10.3.5extrastuff).
+static bool darwin_get_release_version(const char *str, int *major, int *minor, int *micro, bool *had_extra) {
+    *had_extra = false;
+
+    *major = 0;
+    *minor = 0;
+    *micro = 0;
+
+    if (*str == '\0')
+        return false;
+
+    char *end;
+    *major = strtol(str, &end, 10);
+    if (*str != '\0' && *end == '\0')
+        return true;
+    if (*end != '.')
+        return false;
+
+    str = end + 1;
+    *minor = strtol(str, &end, 10);
+    if (*str != '\0' && *end == '\0')
+        return true;
+    if (*end != '.')
+        return false;
+
+    str = end + 1;
+    *micro = strtol(str, &end, 10);
+    if (*str != '\0' && *end == '\0')
+        return true;
+    if (str == end)
+        return false;
+    *had_extra = true;
+    return true;
+}
+
+enum DarwinPlatformKind {
+    MacOS,
+    IPhoneOS,
+    IPhoneOSSimulator,
+};
+
+struct DarwinPlatform {
+    DarwinPlatformKind kind;
+    int major;
+    int minor;
+    int micro;
+};
+
+static void get_darwin_platform(LinkJob *lj, DarwinPlatform *platform) {
+    CodeGen *g = lj->codegen;
+
+    if (g->mmacosx_version_min) {
+        platform->kind = MacOS;
+    } else if (g->mios_version_min) {
+        platform->kind = IPhoneOS;
+    } else {
+        zig_panic("unable to infer -macosx-version-min or -mios-version-min");
+    }
+
+    bool had_extra;
+    if (platform->kind == MacOS) {
+        if (!darwin_get_release_version(buf_ptr(g->mmacosx_version_min),
+                    &platform->major, &platform->minor, &platform->micro, &had_extra) ||
+                had_extra || platform->major != 10 || platform->minor >= 100 || platform->micro >= 100)
+        {
+            zig_panic("invalid -mmacosx-version-min");
+        }
+    } else if (platform->kind == IPhoneOS) {
+        if (!darwin_get_release_version(buf_ptr(g->mios_version_min),
+                    &platform->major, &platform->minor, &platform->micro, &had_extra) ||
+                had_extra || platform->major >= 10 || platform->minor >= 100 || platform->micro >= 100)
+        {
+            zig_panic("invalid -mios-version-min");
+        }
+    } else {
+        zig_unreachable();
+    }
+
+    if (platform->kind == IPhoneOS &&
+        (g->zig_target.arch.arch == ZigLLVM_x86 ||
+         g->zig_target.arch.arch == ZigLLVM_x86_64))
+    {
+        platform->kind = IPhoneOSSimulator;
+    }
+}
+
+static bool darwin_version_lt(DarwinPlatform *platform, int major, int minor) {
+    if (platform->major < major) {
+        return true;
+    } else if (platform->major > major) {
+        return false;
+    }
+    if (platform->minor < minor) {
+        return true;
+    }
+    return false;
+}
+
+static void construct_linker_job_darwin(LinkJob *lj) {
+    CodeGen *g = lj->codegen;
+
+    int ver_major;
+    int ver_minor;
+    int ver_micro;
+    bool had_extra;
+
+    if (!darwin_get_release_version(buf_ptr(g->darwin_linker_version), &ver_major, &ver_minor, &ver_micro,
+                &had_extra) || had_extra)
+    {
+        zig_panic("invalid linker version number");
+    }
+
+    // Newer linkers support -demangle. Pass it if supported and not disabled by
+    // the user.
+    if (ver_major >= 100) {
+        lj->args.append("-demangle");
+    }
+
+    if (g->linker_rdynamic && ver_major >= 137) {
+        lj->args.append("-export_dynamic");
+    }
+
+    bool is_lib = g->out_type == OutTypeLib;
+    bool shared = !g->is_static && is_lib;
+    if (g->is_static) {
+        lj->args.append("-static");
+    } else {
+        lj->args.append("-dynamic");
+    }
+
+    if (is_lib) {
+        zig_panic("TODO linker args on darwin for making a library");
+    }
+
+    lj->args.append("-arch");
+    lj->args.append(get_darwin_arch_string(&g->zig_target));
+
+    DarwinPlatform platform;
+    get_darwin_platform(lj, &platform);
+    switch (platform.kind) {
+        case MacOS:
+            lj->args.append("-macosx_version_min");
+            break;
+        case IPhoneOS:
+            lj->args.append("-iphoneos_version_min");
+            break;
+        case IPhoneOSSimulator:
+            lj->args.append("-ios_simulator_version_min");
+            break;
+    }
+    lj->args.append(buf_ptr(buf_sprintf("%d.%d.%d", platform.major, platform.minor, platform.micro)));
+
+
+    if (g->out_type == OutTypeExe) {
+        if (g->is_static) {
+            lj->args.append("-no_pie");
+        } else {
+            lj->args.append("-pie");
+        }
+    }
+
+    lj->args.append("-o");
+    lj->args.append(buf_ptr(&lj->out_file));
+
+    if (shared) {
+        zig_panic("TODO");
+    } else if (g->is_static) {
+        lj->args.append("-lcrt0.o");
+    } else {
+        switch (platform.kind) {
+            case MacOS:
+                if (darwin_version_lt(&platform, 10, 5)) {
+                    lj->args.append("-lcrt1.o");
+                } else if (darwin_version_lt(&platform, 10, 6)) {
+                    lj->args.append("-lcrt1.10.5.o");
+                } else if (darwin_version_lt(&platform, 10, 8)) {
+                    lj->args.append("-lcrt1.10.6.o");
+                }
+                break;
+            case IPhoneOS:
+                if (g->zig_target.arch.arch == ZigLLVM_aarch64) {
+                    // iOS does not need any crt1 files for arm64
+                } else if (darwin_version_lt(&platform, 3, 1)) {
+                    lj->args.append("-lcrt1.o");
+                } else if (darwin_version_lt(&platform, 6, 0)) {
+                    lj->args.append("-lcrt1.3.1.o");
+                }
+                break;
+            case IPhoneOSSimulator:
+                // no crt1.o needed
+                break;
+        }
+    }
+
+    for (int i = 0; i < g->lib_dirs.length; i += 1) {
+        const char *lib_dir = g->lib_dirs.at(i);
+        lj->args.append("-L");
+        lj->args.append(lib_dir);
+    }
+
+    lj->args.append((const char *)buf_ptr(&lj->out_file_o));
+
+    for (int i = 0; i < g->link_libs.length; i += 1) {
+        Buf *link_lib = g->link_libs.at(i);
+        Buf *arg = buf_sprintf("-l%s", buf_ptr(link_lib));
+        lj->args.append(buf_ptr(arg));
+    }
+
+    // on Darwin, libSystem has libc in it, but also you have to use it
+    // to make syscalls because the syscall numbers are not documented
+    // and change between versions.
+    // so we always link against libSystem
+    lj->args.append("-lSystem");
+
+    if (platform.kind == MacOS) {
+        if (darwin_version_lt(&platform, 10, 5)) {
+            lj->args.append("-lgcc_s.10.4");
+        } else if (darwin_version_lt(&platform, 10, 6)) {
+            lj->args.append("-lgcc_s.10.5");
+        }
+    } else {
+        zig_panic("TODO");
+    }
+
+}
+
 static void construct_linker_job(LinkJob *lj) {
     switch (lj->codegen->zig_target.os) {
         case ZigLLVM_UnknownOS:
-             zig_unreachable();
+            zig_unreachable();
         case ZigLLVM_Linux:
-             if (lj->codegen->zig_target.arch.arch == ZigLLVM_hexagon) {
+            if (lj->codegen->zig_target.arch.arch == ZigLLVM_hexagon) {
                 zig_panic("TODO construct hexagon_TC linker job");
-             } else {
+            } else {
                 return construct_linker_job_linux(lj);
-             }
+            }
         case ZigLLVM_CloudABI:
-             zig_panic("TODO construct CloudABI linker job");
+            zig_panic("TODO construct CloudABI linker job");
         case ZigLLVM_Darwin:
         case ZigLLVM_MacOSX:
         case ZigLLVM_IOS:
-             zig_panic("TODO construct DarwinClang linker job");
+            return construct_linker_job_darwin(lj);
         case ZigLLVM_DragonFly:
-             zig_panic("TODO construct DragonFly linker job");
+            zig_panic("TODO construct DragonFly linker job");
         case ZigLLVM_OpenBSD:
-             zig_panic("TODO construct OpenBSD linker job");
+            zig_panic("TODO construct OpenBSD linker job");
         case ZigLLVM_Bitrig:
-             zig_panic("TODO construct Bitrig linker job");
+            zig_panic("TODO construct Bitrig linker job");
         case ZigLLVM_NetBSD:
-             zig_panic("TODO construct NetBSD linker job");
+            zig_panic("TODO construct NetBSD linker job");
         case ZigLLVM_FreeBSD:
-             zig_panic("TODO construct FreeBSD linker job");
+            zig_panic("TODO construct FreeBSD linker job");
         case ZigLLVM_Minix:
-             zig_panic("TODO construct Minix linker job");
+            zig_panic("TODO construct Minix linker job");
         case ZigLLVM_NaCl:
-             zig_panic("TODO construct NaCl_TC linker job");
+            zig_panic("TODO construct NaCl_TC linker job");
         case ZigLLVM_Solaris:
-             zig_panic("TODO construct Solaris linker job");
+            zig_panic("TODO construct Solaris linker job");
         case ZigLLVM_Win32:
-            switch (lj->codegen->zig_target.environ) {
+            switch (lj->codegen->zig_target.env_type) {
                 default:
                     if (lj->codegen->zig_target.oformat == ZigLLVM_ELF) {
                         zig_panic("TODO construct Generic_ELF linker job");
@@ -431,27 +706,27 @@ static void construct_linker_job(LinkJob *lj) {
                 case ZigLLVM_MSVC:
                 case ZigLLVM_UnknownEnvironment:
                     zig_panic("TODO construct MSVC linker job");
-             }
+            }
         case ZigLLVM_CUDA:
-             zig_panic("TODO construct Cuda linker job");
+            zig_panic("TODO construct Cuda linker job");
         default:
-             // Of these targets, Hexagon is the only one that might have
-             // an OS of Linux, in which case it got handled above already.
-             if (lj->codegen->zig_target.arch.arch == ZigLLVM_tce) {
+            // Of these targets, Hexagon is the only one that might have
+            // an OS of Linux, in which case it got handled above already.
+            if (lj->codegen->zig_target.arch.arch == ZigLLVM_tce) {
                 zig_panic("TODO construct TCE linker job");
-             } else if (lj->codegen->zig_target.arch.arch == ZigLLVM_hexagon) {
+            } else if (lj->codegen->zig_target.arch.arch == ZigLLVM_hexagon) {
                 zig_panic("TODO construct Hexagon_TC linker job");
-             } else if (lj->codegen->zig_target.arch.arch == ZigLLVM_xcore) {
+            } else if (lj->codegen->zig_target.arch.arch == ZigLLVM_xcore) {
                 zig_panic("TODO construct XCore linker job");
-             } else if (lj->codegen->zig_target.arch.arch == ZigLLVM_shave) {
+            } else if (lj->codegen->zig_target.arch.arch == ZigLLVM_shave) {
                 zig_panic("TODO construct SHAVE linker job");
-             } else if (lj->codegen->zig_target.oformat == ZigLLVM_ELF) {
+            } else if (lj->codegen->zig_target.oformat == ZigLLVM_ELF) {
                 zig_panic("TODO construct Generic_ELF linker job");
-             } else if (lj->codegen->zig_target.oformat == ZigLLVM_MachO) {
+            } else if (lj->codegen->zig_target.oformat == ZigLLVM_MachO) {
                 zig_panic("TODO construct MachO linker job");
-             } else {
+            } else {
                 zig_panic("TODO construct Generic_GCC linker job");
-             }
+            }
 
     }
 }
@@ -526,13 +801,6 @@ void codegen_link(CodeGen *g, const char *out_file) {
     }
 
     lj.link_in_crt = (g->link_libc && g->out_type == OutTypeExe);
-    if (lj.link_in_crt) {
-        find_libc_path(g);
-    }
-
-
-
-    // invoke `ld`
     ensure_we_have_linker_path(g);
 
     construct_linker_job(&lj);
@@ -549,7 +817,11 @@ void codegen_link(CodeGen *g, const char *out_file) {
     int return_code;
     Buf ld_stderr = BUF_INIT;
     Buf ld_stdout = BUF_INIT;
-    os_exec_process(buf_ptr(g->linker_path), lj.args, &return_code, &ld_stderr, &ld_stdout);
+    int err = os_exec_process(buf_ptr(g->linker_path), lj.args, &return_code, &ld_stderr, &ld_stdout);
+    if (err) {
+        fprintf(stderr, "linker not found: '%s'\n", buf_ptr(g->linker_path));
+        exit(1);
+    }
 
     if (return_code != 0) {
         fprintf(stderr, "linker failed with return code %d\n", return_code);

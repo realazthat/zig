@@ -30,7 +30,7 @@ install:
 script:
   - LLVM_CONFIG_EXE=llvm-config-3.7 CMAKE_GENERATOR="Unix Makefiles" bash ./ci/build.sh
   - bash ./ci/test.sh
-  
+  - cd build && ./zig build .tmp_source.zig --export exe --name test --output ./.tmp_exe --release --strip --color on
 
 
 

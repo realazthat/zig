@@ -19,7 +19,11 @@ addons:
     - gcc-5
     - g++-5
     - libedit-dev
+    - gdb
 
+before_script:
+ # to generate core dumps
+ - ulimit -c unlimited -S
 
 install:
   - sudo bash ./ci/install-llvm-37-from-repos.sh
@@ -29,8 +33,12 @@ install:
 
 script:
   - LLVM_CONFIG_EXE=llvm-config-3.7 CMAKE_GENERATOR="Unix Makefiles" bash ./ci/build.sh
-  - bash ./ci/test.sh
-  - cd build && ./zig build .tmp_source.zig --export exe --name test --output ./.tmp_exe --release --strip --color on
-
-
+  -
+  - RESULT=0
+  - bash ./ci/test.sh || RESULT=$?
+  - cd build
+  - ./zig build .tmp_source.zig --export exe --name test --output ./.tmp_exe --release --strip --color on
+  - for i in $(find ./ -maxdepth 1 -name 'core*' -print); do gdb $(pwd)/zig core* -ex "thread apply all bt" -ex "set pagination 0" -batch; done;
+  - if [[ ${RESULT} != 0 ]]; then exit $RESULT ; fi;
+  - cd ..
 

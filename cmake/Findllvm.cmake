@@ -20,7 +20,7 @@ find_program(LLVM_CONFIG_EXE NAMES llvm-config llvm-config-3.8)
 #
 
 
-find_program(LLVM_CONFIG_EXE NAMES llvm-config llvm-config-3.7 DOC "FULL Path to llvm-config for LLVM; if specified, many of the other llvm-related vars are implicit")
+find_program(LLVM_CONFIG_EXE NAMES llvm-config llvm-config-3.8 DOC "FULL Path to llvm-config for LLVM; if specified, many of the other llvm-related vars are implicit")
 
 
 

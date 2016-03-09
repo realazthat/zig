@@ -22,7 +22,7 @@ addons:
 
 
 install:
-  - sudo bash ./ci/install-llvm-37-from-repos.sh
+  - sudo bash ./ci/install-llvm-38-from-repos.sh
   - if [ "$CXX" = "clang++" ]; then export CXX="clang++-3.8" CC="clang-3.8"; fi
   - if [ "$CXX" = "g++" ]; then export CXX="g++-5" CC="gcc-5"; fi
 

@@ -36,7 +36,6 @@ struct Context {
     ZigList<ErrorMsg *> *errors;
     bool warnings_on;
     VisibMod visib_mod;
-    TypeTableEntry *c_void_type;
     AstNode *root;
     HashMap<Buf *, TypeTableEntry *, buf_hash, buf_eql_buf> global_type_table;
     HashMap<Buf *, GlobalValue, buf_hash, buf_eql_buf> global_value_table;
@@ -121,9 +120,9 @@ static AstNode *create_typed_var_decl_node(Context *c, bool is_const, const char
     AstNode *node = create_node(c, NodeTypeVariableDeclaration);
     buf_init_from_str(&node->data.variable_declaration.symbol, var_name);
     node->data.variable_declaration.is_const = is_const;
-    node->data.variable_declaration.visib_mod = c->visib_mod;
+    node->data.variable_declaration.top_level_decl.visib_mod = c->visib_mod;
     node->data.variable_declaration.expr = init_node;
-    node->data.variable_declaration.directives = nullptr;
+    node->data.variable_declaration.top_level_decl.directives = nullptr;
     node->data.variable_declaration.type = type_node;
     normalize_parent_ptrs(node);
     return node;
@@ -146,7 +145,7 @@ static AstNode *create_struct_field_node(Context *c, const char *name, AstNode *
     assert(type_node);
     AstNode *node = create_node(c, NodeTypeStructField);
     buf_init_from_str(&node->data.struct_field.name, name);
-    node->data.struct_field.visib_mod = VisibModPub;
+    node->data.struct_field.top_level_decl.visib_mod = VisibModPub;
     node->data.struct_field.type = type_node;
 
     normalize_parent_ptrs(node);
@@ -202,7 +201,7 @@ static AstNode *create_num_lit_signed(Context *c, int64_t x) {
 static AstNode *create_type_decl_node(Context *c, const char *name, AstNode *child_type_node) {
     AstNode *node = create_node(c, NodeTypeTypeDecl);
     buf_init_from_str(&node->data.type_decl.symbol, name);
-    node->data.type_decl.visib_mod = c->visib_mod;
+    node->data.type_decl.top_level_decl.visib_mod = c->visib_mod;
     node->data.type_decl.child_type = child_type_node;
 
     normalize_parent_ptrs(node);
@@ -219,7 +218,7 @@ static AstNode *create_fn_proto_node(Context *c, Buf *name, TypeTableEntry *fn_t
     assert(fn_type->id == TypeTableEntryIdFn);
     AstNode *node = create_node(c, NodeTypeFnProto);
     node->data.fn_proto.is_inline = true;
-    node->data.fn_proto.visib_mod = c->visib_mod;
+    node->data.fn_proto.top_level_decl.visib_mod = c->visib_mod;
     buf_init_from_buf(&node->data.fn_proto.name, name);
     node->data.fn_proto.return_type = make_type_node(c, fn_type->data.fn.fn_type_id.return_type);
 
@@ -292,21 +291,9 @@ static AstNode *add_const_var_node(Context *c, Buf *name, TypeTableEntry *type_e
     return node;
 }
 
-static TypeTableEntry *get_c_void_type(Context *c) {
-    if (!c->c_void_type) {
-        c->c_void_type = get_typedecl_type(c->codegen, "c_void", c->codegen->builtin_types.entry_u8);
-        add_typedef_node(c, c->c_void_type);
-    }
-
-    return c->c_void_type;
-}
-
 static bool is_c_void_type(Context *c, TypeTableEntry *type_entry) {
-    if (!c->c_void_type) {
-        return false;
-    }
     while (type_entry->id == TypeTableEntryIdTypeDecl) {
-        if (type_entry == c->c_void_type) {
+        if (type_entry == c->codegen->builtin_types.entry_c_void) {
             return true;
         }
         type_entry = type_entry->data.type_decl.child_type;
@@ -336,7 +323,7 @@ static TypeTableEntry *resolve_type_with_table(Context *c, const Type *ty, const
                 const BuiltinType *builtin_ty = static_cast<const BuiltinType*>(ty);
                 switch (builtin_ty->getKind()) {
                     case BuiltinType::Void:
-                        return get_c_void_type(c);
+                        return c->codegen->builtin_types.entry_c_void;
                     case BuiltinType::Bool:
                         return c->codegen->builtin_types.entry_bool;
                     case BuiltinType::Char_U:
@@ -383,6 +370,17 @@ static TypeTableEntry *resolve_type_with_table(Context *c, const Type *ty, const
                     case BuiltinType::OCLImage1dBuffer:
                     case BuiltinType::OCLImage2d:
                     case BuiltinType::OCLImage2dArray:
+                    case BuiltinType::OCLImage2dArrayDepth:
+                    case BuiltinType::OCLImage2dDepth:
+                    case BuiltinType::OCLImage2dMSAA:
+                    case BuiltinType::OCLImage2dArrayMSAA:
+                    case BuiltinType::OCLImage2dMSAADepth:
+                    case BuiltinType::OCLImage2dArrayMSAADepth:
+                    case BuiltinType::OCLClkEvent:
+                    case BuiltinType::OCLQueue:
+                    case BuiltinType::OCLNDRange:
+                    case BuiltinType::OCLReserveID:
+                    case BuiltinType::OMPArraySection:
                     case BuiltinType::OCLImage3d:
                     case BuiltinType::OCLSampler:
                     case BuiltinType::OCLEvent:
@@ -639,6 +637,7 @@ static TypeTableEntry *resolve_type_with_table(Context *c, const Type *ty, const
         case Type::Complex:
         case Type::ObjCObjectPointer:
         case Type::Atomic:
+        case Type::Pipe:
             emit_warning(c, decl, "missed a '%s' type", ty->getTypeClassName());
             return c->codegen->builtin_types.entry_invalid;
     }
@@ -677,7 +676,7 @@ static void visit_fn_decl(Context *c, const FunctionDecl *fn_decl) {
     buf_init_from_buf(&node->data.fn_proto.name, &fn_name);
 
     node->data.fn_proto.is_extern = fn_type->data.fn.fn_type_id.is_extern;
-    node->data.fn_proto.visib_mod = c->visib_mod;
+    node->data.fn_proto.top_level_decl.visib_mod = c->visib_mod;
     node->data.fn_proto.is_var_args = fn_type->data.fn.fn_type_id.is_var_args;
     node->data.fn_proto.return_type = make_type_node(c, fn_type->data.fn.fn_type_id.return_type);
 
@@ -861,7 +860,7 @@ static void visit_enum_decl(Context *c, const EnumDecl *enum_decl) {
     AstNode *enum_node = create_node(c, NodeTypeStructDecl);
     buf_init_from_buf(&enum_node->data.struct_decl.name, full_type_name);
     enum_node->data.struct_decl.kind = ContainerKindEnum;
-    enum_node->data.struct_decl.visib_mod = VisibModExport;
+    enum_node->data.struct_decl.top_level_decl.visib_mod = VisibModExport;
     enum_node->data.struct_decl.type_entry = enum_type;
 
     for (uint32_t i = 0; i < field_count; i += 1) {
@@ -1043,7 +1042,7 @@ static void visit_record_decl(Context *c, const RecordDecl *record_decl) {
         AstNode *struct_node = create_node(c, NodeTypeStructDecl);
         buf_init_from_buf(&struct_node->data.struct_decl.name, &struct_type->name);
         struct_node->data.struct_decl.kind = ContainerKindStruct;
-        struct_node->data.struct_decl.visib_mod = VisibModExport;
+        struct_node->data.struct_decl.top_level_decl.visib_mod = VisibModExport;
         struct_node->data.struct_decl.type_entry = struct_type;
 
         for (uint32_t i = 0; i < struct_type->data.structure.src_field_count; i += 1) {
@@ -1611,9 +1610,9 @@ int parse_h_file(ImportTableEntry *import, ZigList<ErrorMsg *> *errors, const ch
     std::unique_ptr<ASTUnit> ast_unit(ASTUnit::LoadFromCommandLine(
             &clang_argv.at(0), &clang_argv.last(),
             pch_container_ops, diags, resources_path,
-            only_local_decls, capture_diagnostics, None, true, false, TU_Complete,
+            only_local_decls, capture_diagnostics, None, true, 0, TU_Complete,
             false, false, allow_pch_with_compiler_errors, skip_function_bodies,
-            user_files_are_volatile, false, &err_unit));
+            user_files_are_volatile, false, None, &err_unit));
 
 
     // Early failures in LoadFromCommandLine may return with ErrUnit unset.

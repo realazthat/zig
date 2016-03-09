@@ -1,6 +1,6 @@
-import "syscall.zig";
-import "errno.zig";
-import "math.zig";
+const linux = @import("linux.zig");
+const errno = @import("errno.zig");
+const math = @import("math.zig");
 
 pub const stdin_fileno = 0;
 pub const stdout_fileno = 1;
@@ -55,7 +55,7 @@ pub struct OutStream {
         const dest_space_left = os.buffer.len - os.index;
 
         while (src_bytes_left > 0) {
-            const copy_amt = min_isize(dest_space_left, src_bytes_left);
+            const copy_amt = math.min_isize(dest_space_left, src_bytes_left);
             @memcpy(&os.buffer[os.index], &str[src_index], copy_amt);
             os.index += copy_amt;
             if (os.index == os.buffer.len) {
@@ -105,19 +105,31 @@ pub struct OutStream {
     }
 
     pub fn flush(os: &OutStream) -> %void {
-        const amt_written = write(os.fd, &os.buffer[0], os.index);
+        const amt_written = linux.write(os.fd, &os.buffer[0], os.index);
         os.index = 0;
         if (amt_written < 0) {
             return switch (-amt_written) {
-                EINVAL => unreachable{},
-                EDQUOT => error.DiskQuota,
-                EFBIG  => error.FileTooBig,
-                EINTR  => error.SigInterrupt,
-                EIO    => error.Io,
-                ENOSPC => error.NoSpaceLeft,
-                EPERM  => error.BadPerm,
-                EPIPE  => error.PipeFail,
-                else   => error.Unexpected,
+                errno.EINVAL => unreachable{},
+                errno.EDQUOT => error.DiskQuota,
+                errno.EFBIG  => error.FileTooBig,
+                errno.EINTR  => error.SigInterrupt,
+                errno.EIO    => error.Io,
+                errno.ENOSPC => error.NoSpaceLeft,
+                errno.EPERM  => error.BadPerm,
+                errno.EPIPE  => error.PipeFail,
+                else         => error.Unexpected,
+            }
+        }
+    }
+
+    pub fn close(os: &OutStream) -> %void {
+        const closed = linux.close(os.fd);
+        if (closed < 0) {
+            return switch (-closed) {
+                errno.EIO => error.Io,
+                errno.EBADF => error.BadFd,
+                errno.EINTR => error.SigInterrupt,
+                else => error.Unexpected,
             }
         }
     }
@@ -127,25 +139,37 @@ pub struct InStream {
     fd: isize,
 
     pub fn read(is: &InStream, buf: []u8) -> %isize {
-        const amt_read = read(is.fd, &buf[0], buf.len);
+        const amt_read = linux.read(is.fd, &buf[0], buf.len);
         if (amt_read < 0) {
             return switch (-amt_read) {
-                EINVAL => unreachable{},
-                EFAULT => unreachable{},
-                EBADF  => error.BadFd,
-                EINTR  => error.SigInterrupt,
-                EIO    => error.Io,
-                else   => error.Unexpected,
+                errno.EINVAL => unreachable{},
+                errno.EFAULT => unreachable{},
+                errno.EBADF  => error.BadFd,
+                errno.EINTR  => error.SigInterrupt,
+                errno.EIO    => error.Io,
+                else         => error.Unexpected,
             }
         }
         return amt_read;
+    }
+
+    pub fn close(is: &InStream) -> %void {
+        const closed = linux.close(is.fd);
+        if (closed < 0) {
+            return switch (-closed) {
+                errno.EIO => error.Io,
+                errno.EBADF => error.BadFd,
+                errno.EINTR => error.SigInterrupt,
+                else => error.Unexpected,
+            }
+        }
     }
 }
 
 #attribute("cold")
 pub fn abort() -> unreachable {
-    raise(SIGABRT);
-    raise(SIGKILL);
+    linux.raise(linux.SIGABRT);
+    linux.raise(linux.SIGKILL);
     while (true) {}
 }
 
@@ -229,15 +253,15 @@ pub fn buf_print_f64(out_buf: []u8, x: f64, decimals: isize) -> isize {
         decs = max_u64_base10_digits - 1;
     }
 
-    if (x == f64_get_pos_inf()) {
+    if (x == math.f64_get_pos_inf()) {
         const buf2 = "+Inf";
         @memcpy(&out_buf[0], &buf2[0], buf2.len);
         return 4;
-    } else if (x == f64_get_neg_inf()) {
+    } else if (x == math.f64_get_neg_inf()) {
         const buf2 = "-Inf";
         @memcpy(&out_buf[0], &buf2[0], buf2.len);
         return 4;
-    } else if (f64_is_nan(x)) {
+    } else if (math.f64_is_nan(x)) {
         const buf2 = "NaN";
         @memcpy(&out_buf[0], &buf2[0], buf2.len);
         return 3;
@@ -251,7 +275,7 @@ pub fn buf_print_f64(out_buf: []u8, x: f64, decimals: isize) -> isize {
     // 11 exponent bits
     // 52 significand bits (+ 1 implicit always non-zero bit)
 
-    const bits = f64_to_bits(x);
+    const bits = math.f64_to_bits(x);
     if (bits & (1 << 63) != 0) {
         buf[0] = '-';
         len += 1;

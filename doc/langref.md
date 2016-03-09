@@ -5,9 +5,7 @@
 ```
 Root = many(TopLevelDecl) "EOF"
 
-TopLevelDecl = many(Directive) option(VisibleMod) (FnDef | ExternDecl | RootExportDecl | Import | ContainerDecl | GlobalVarDecl | ErrorValueDecl | CImportDecl | TypeDecl)
-
-CImportDecl = "c_import" Block
+TopLevelDecl = many(Directive) option(VisibleMod) (FnDef | ExternDecl | ContainerDecl | GlobalVarDecl | ErrorValueDecl | TypeDecl | UseDecl)
 
 TypeDecl = "type" "Symbol" "=" TypeExpr ";"
 
@@ -23,9 +21,7 @@ StructMember = many(Directive) option(VisibleMod) (StructField | FnDef)
 
 StructField = "Symbol" option(":" Expression) ",")
 
-Import = "import" "String" ";"
-
-RootExportDecl = "export" "Symbol" "String" ";"
+UseDecl = "use" Expression ";"
 
 ExternDecl = "extern" (FnProto | VariableDeclaration) ";"
 
@@ -208,6 +204,7 @@ c_ulong         unsigned long       for ABI compatibility with C
 c_longlong      long long           for ABI compatibility with C
 c_ulonglong     unsigned long long  for ABI compatibility with C
 c_long_double   long double         for ABI compatibility with C
+c_void          void                for ABI compatibility with C
 ```
 
 ### Boolean Type

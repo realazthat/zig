@@ -3,6 +3,7 @@
 # See http://opensource.org/licenses/MIT
 
 
+find_program(LLVM_CONFIG_EXE NAMES llvm-config llvm-config-3.8)
 # - Try to find LLVM
 # Once done this will define
 # LLVM_FOUND - found LLVM, and all necessary libraries
